@@ -1,0 +1,163 @@
+import pandas as pd
+import openpyxl
+from openpyxl import load_workbook
+from openpyxl.utils.dataframe import dataframe_to_rows
+import nvdlib
+
+# File paths
+source_file = r"POAM Results" #POAM Results pulled (would copy over the open POAM items to a new CSV file)
+template_file = r"FedRAMP-Vulnerability-Deviation-Request-Form" #found in FedRAMP website
+output_file = r"FedRAMP-Mapped-Output"
+
+# Load the source data
+source_df = pd.read_excel(source_file)
+
+# Load the template
+try:
+    template_wb = load_workbook(template_file)
+    template_ws = template_wb['DR Sheet']
+except Exception as e:
+    print(f"Error loading template: {e}")
+    exit()
+
+# Function to get CVSS Base Score from CVE
+def get_cvss_base_score(cve_id):
+    try:
+        result = nvdlib.searchCVE(cveId=cve_id)
+        if result:
+            return result[0].v31score  # CVSS v3.1 score
+        else:
+            return None
+    except Exception as e:
+        print(f"Error retrieving CVSS score for {cve_id}: {e}")
+        return None
+
+# Function to get CVE details
+def get_cve_details(cve_id):
+    try:
+        result = nvdlib.searchCVE(cveId=cve_id)
+        if result:
+            return {
+                'Attack Vector': result[0].v31attackVector,
+                'Attack Complexity': result[0].v31attackComplexity,
+                'Privileges Required': result[0].v31privilegesRequired,
+                'User Interaction': result[0].v31userInteraction,
+                'Impact Metrics: Confidentiality': result[0].v31confidentialityImpact,
+                'Impact Metrics: Integrity': result[0].v31integrityImpact,
+                'Impact Metrics: Availability': result[0].v31availabilityImpact,
+                'Exploitability': result[0].v31exploitability,
+                'Impact Score': result[0].v31impactScore
+            }
+        else:
+            return {
+                'Attack Vector': None,
+                'Attack Complexity': None,
+                'Privileges Required': None,
+                'User Interaction': None,
+                'Impact Metrics: Confidentiality': None,
+                'Impact Metrics: Integrity': None,
+                'Impact Metrics: Availability': None,
+                'Exploitability': None,
+                'Impact Score': None
+            }
+    except Exception as e:
+        print(f"Error retrieving CVE details for {cve_id}: {e}")
+        return {
+            'Attack Vector': None,
+            'Attack Complexity': None,
+            'Privileges Required': None,
+            'User Interaction': None,
+            'Impact Metrics: Confidentiality': None,
+            'Impact Metrics: Integrity': None,
+            'Impact Metrics: Availability': None,
+            'Exploitability': None,
+            'Impact Score': None
+        }
+
+# Mapping columns
+mapping = {
+    'DR Number': lambda row: f"{pd.Timestamp.now().year}-{pd.Timestamp.now().month:02d}-{row.name + 1:03d}", #Optional Can be changed
+    'POA&M ID': 'POAM ID',
+    'Scan ID': 'Weakness Source Identifier',
+    'CVE': 'CVE',
+    'Assets Impacted': 'Asset Identifier',
+    'Vulnerability Name': 'Weakness Name',
+    'Vulnerability Source': 'Weakness Detector Source',
+    'Initial Risk Rating': 'Original Risk Rating',
+    'CVSS Base Score': lambda row: get_cvss_base_score(source_df.loc[row.name, 'CVE']),
+    'Original Detection Date': 'Original Detection Date',
+    'Tool-Provided Vulnerability Description': 'Weakness Description',
+    'Tool-Provided Recommeded Action': None
+    'CSP-Provided Vulnerability Information (Optional)': None,
+    'Type of DR': None,
+    'Requested Risk Rating/Impact': lambda row: f"Exploitability: {get_cve_details(source_df.loc[row.name, 'CVE'])['Exploitability']}, Impact Score: {get_cve_details(source_df.loc[row.name, 'CVE'])['Impact Score']}",
+    'Adjusted CVSS Score': None,
+    'DR Submission Date': None,
+    'DR Rationale': 'Deviation Rationale',
+    'Evidence Description': None,
+    'List of Evidence Attachments': None,
+    'Operational Impact Statement': None,
+    'Justification': None,
+    'List of Operational Requirement Attachments': None,
+    'Attack Vector': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Attack Vector'],
+    'Attack Vector Explanation': None,
+    'Attack Complexity': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Attack Complexity'],
+    'Attack Complexity Explanation': None,
+    'Privileges Required': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Privileges Required'],
+    'Privileges Required Explanation': None,
+    'User Interaction': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['User Interaction'],
+    'User Interaction Explanation': None,
+    'Impact Metrics: Confidentiality': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Impact Metrics: Confidentiality'],
+    'Impact Metrics: Confidentiality Explanation': None,
+    'Impact Metrics: Integrity': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Impact Metrics: Integrity'],
+    'Impact Metrics: Integrity Explanation': None,
+    'Impact Metrics: Availability': lambda row: get_cve_details(source_df.loc[row.name, 'CVE'])['Impact Metrics: Availability'],
+    'Impact Metrics: Availability Explanation': None,
+    'Remediation Level': None,
+    'Remediation Level Explanation': None,
+    'List of Risk Reduction': None,
+    'Deviation Status': None,
+    'Date Submitted to JAB TRs': None,
+    'GSA Review Status': None,
+    'GSA Reviewer Name': None,
+    'GSA Status Date': None,
+    'GSA Comments': None,
+    'DOD Review Status': None,
+    'DOD Reviewer Name': None,
+    'DOD Status Date': None,
+    'DOD Comments': None,
+    'DHS Review Status': None,
+    'DHS Reviewer Name': None,
+    'DHS Status Date': None,
+    'DHS Comments': None,
+    'CSP Comments': None,
+    '3PAO Comments': None
+}
+
+# Create DataFrame for output
+output_df = pd.DataFrame()
+
+# Populate the output DataFrame
+for col, src in mapping.items():
+    if src is None:
+        output_df[col] = None
+    elif callable(src):
+        output_df[col] = source_df.apply(src, axis=1)
+    else:
+        if src in source_df.columns:
+            output_df[col] = source_df[src]
+        else:
+            print(f"Warning: Column '{src}' not found in source DataFrame.")
+
+# Insert data starting at row 11 (index 10 in 0-based index)
+start_row = 11
+for r_idx, row in enumerate(dataframe_to_rows(output_df, index=False, header=False), start=start_row):
+    for c_idx, value in enumerate(row, start=1):
+        template_ws.cell(row=r_idx, column=c_idx, value=value)
+
+# Save the updated file
+try:
+    template_wb.save(output_file)
+    print(f"Output successfully saved to {output_file}")
+except Exception as e:
+    print(f"Error saving output file: {e}")
